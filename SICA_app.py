@@ -130,8 +130,8 @@ X = df[features].values
 # Perform PCA and plot
 pca = PCA(n_components=2)
 X_pca = pca.fit_transform(X)
-df['x_pca'] = X[:, 0]
-df['y_pca'] = X[:, 1]
+df['x_pca'] = X_pca[:, 0]
+df['y_pca'] = X_pca[:, 1]
 
 sica = SICA()
 X_sica = sica.fit_transform(X, create_laplacian(list(df.energy)))
@@ -241,8 +241,8 @@ def update_regulariser(attr, old, new):
     # Perform PCA
     pca = PCA(n_components=2)
     X_pca = pca.fit_transform(X)
-    df['x_pca'] = X[:, 0]
-    df['y_pca'] =  X[:, 1]
+    df['x_pca'] = X_pca[:, 0]
+    df['y_pca'] =  X_pca[:, 1]
     X_sica = sica.fit_transform(X, create_laplacian(list(df[reg])))
     df['x_sica'] = X_sica[:, 0]
     df['y_sica'] = X_sica[:, 1]
