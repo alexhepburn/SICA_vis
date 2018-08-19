@@ -1,5 +1,5 @@
 # SICA_vis
-To run, make sure SICA_songs.h5 and that the latest version of bokeh is installed. Use command:
+To run, unzip the data file and have the latest version of bokeh is installed. Use command:
 ```
 bokeh serve --show SICA_app.py
 ```
