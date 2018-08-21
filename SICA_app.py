@@ -2,7 +2,6 @@ import pandas as pd
 from sklearn.decomposition import PCA
 import numpy as np 
 from collections import Counter
-from tqdm import tqdm
 from scipy.spatial import distance_matrix
 from scipy import optimize
 from bokeh.models import (LassoSelectTool, PanTool,
@@ -14,14 +13,15 @@ from bokeh.plotting import figure, output_file, show
 from bokeh.layouts import gridplot, widgetbox, layout, column, row
 from bokeh.palettes import Category20
 from bokeh.models.callbacks import CustomJS, OpenURL
+from bokeh.models.graphs import from_networkx, NodesAndLinkedEdges, EdgesAndLinkedNodes
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from bokeh.models.widgets import DataTable, DateFormatter, TableColumn, Slider, Button, Div, Dropdown, Select
 from bokeh.io import curdoc
 import random
-import networkx as nx 
 from scipy.spatial.distance import cdist, squareform
+import matlab.engine 
 
 class Table():
     def __init__(self, name, pca, sica):
@@ -51,36 +51,37 @@ class SICA():
         self.n = 0
         self.I = 0
         self.d = 0
-        self.b = 0
-        self.c = 0
         self.W = 0
+        self.eng = matlab.engine.start_matlab()
 
     def fit_transform(self, X, L):
-        self.X = X
+        self.X = X.T.astype(np.float64)
         self.L = L
-        self.b = np.mean(distance_matrix(X, X))
-        self.c = np.mean(np.linalg.norm(X, ord=2, axis=1))
         self.d = X.shape[1]
         self.n = X.shape[0]
         self.num_edges = np.trace(L)/2
         self.I = np.identity(self.n)
         eig, vec = np.linalg.eig(L)
         self.eig = np.absolute(np.real(eig).flatten())
-        res = optimize.fmin_powell(self.lagrange, [10, 10])
-        return self.update_l_transform(res[0], res[1])
+        #res = optimize.fmin_powell(self.lagrange, [0.1, 0.1])
+        #res = optimize.fmin_bfgs(self.lagrange, [0.1, 0.1], fprime=self.grad)
+        #res = optimize.minimize(self.lagrange, [0.1, 0.1], method='trust-ncg',
+        #                        jac=self.grad, hess=self.hess,
+        #                        options={'xtol': 1e-8, 'disp': True, 'maxiter':1000})
+        W, res = self.eng.findOptimumW(matlab.double(self.X.T.tolist()), matlab.double(self.L.tolist()), nargout=2) 
+        res = np.array(res._data)
+        self.l1, self.l2 = res[0], res[1]
+        W = np.array(W._data).reshape(W.size, order='F')
+        self.components_ = W
+        return np.matmul(self.X.T, W).view(type=np.ndarray)
 
     def update_l_transform(self, l1, l2):
         if l1 != self.l1 or l2 != self.l2:
             self.l1, self.l2 = l1, l2
-            temp = (self.l1/self.num_edges) * self.L + ((self.l2/self.n) * self.I)
-            eig, self.components_ = np.linalg.eig(np.matmul(np.matmul(self.X.T,temp),self.X))
-        return(np.matmul(self.X, self.components_).view(type=np.ndarray))
-
-    def lagrange(self, l):
-        l1, l2 = l
-        t = np.sum(np.log((2*l1*self.eig)/self.num_edges + (2*l2)/self.n))
-        return (-self.d/2)*t + ((self.n*self.d)/2)*np.log(2*np.pi) + l1*self.b + l2*self.c
-
+            W, res= self.eng.findOptimumW(matlab.double(self.X.T.tolist()), matlab.double(self.L.tolist()), matlab.double([l1, l2]), nargout=2)
+            W = np.array(W._data).reshape(W.size, order='F')
+            self.components_ = W
+        return np.matmul(self.X.T, W).view(type=np.ndarray)
 '''
 def create_laplacian(valence):
     L = np.zeros((len(valence), len(valence)), dtype=int)
@@ -88,13 +89,10 @@ def create_laplacian(valence):
     groups = np.zeros((len(valence)))
     groups[valence>mean] = 1
     count = Counter(groups)
-    for key, value in tqdm(count.items()):
+    for key, value in count.items():
         ind = [i for i in range(0, len(valence)) if groups[i] == key]
-        #rand_ind = [random.randint(0, len(valence)-1) for p in range(0, 5)]
         for i in ind:
-            L[i, ind] = -1
-        #    L[i, rand_ind] = -1
-            L[i, i] = value #+ len(rand_ind)
+            L[i, ind] = 1
     return L
 '''
 def create_laplacian(feat):
@@ -103,17 +101,13 @@ def create_laplacian(feat):
         distvec = list(np.absolute(np.array(feat)-feat[i]))
         for k in range(0, len(distvec)):
             dist[i, k] = distvec[k]
-        #ind = [x for x in list(np.absolute(np.array(feat)))]
     e = 0.1
     ind = dist<e 
     ind2 = dist>=e 
     dist[ind] = 1
     dist[ind2] = 0
     np.fill_diagonal(dist, 0)
-    G = nx.from_numpy_matrix(dist)
-    L = nx.laplacian_matrix(G).todense().view(dtype=np.int64, type=np.ndarray)
-    return L
-
+    return dist
 # List of features to use in PCA and SICA from the dataframe
 spot_features = ['danceability', 'energy', 'valence', 'loudness', 'speechiness', 'acousticness', 'instrumentalness', 'liveness', 'tempo']
 features = [x for x in spot_features if x!= 'energy']
@@ -121,9 +115,6 @@ features = [x for x in spot_features if x!= 'energy']
 genres = ['Folk', 'Electronic']
 
 df = pd.read_hdf('/Users/ah13558/Documents/PhD/interesting-svd/data/SICA_songs.h5', 'df') # Load in dataframe which contains youtube & features 
-#df.youtube.apply(lambda x: print(x.replace("watch?v=", "embed/")))
-#sys.exit(0)
-#print(df.youtube)
 df = df.loc[df['genre'].isin(genres)]
 df = df.groupby('genre').head(100).reset_index(drop=True) # Take 50 of each genre
 df['color'] = [Category20[20][x*2] for x in list(df.genre.astype('category').cat.codes)]
@@ -157,10 +148,10 @@ df['x_pca'] = X_pca[:, 0]
 df['y_pca'] = X_pca[:, 1]
 
 sica = SICA()
-X_sica = sica.fit_transform(X, create_laplacian(list(df.energy)))
+lap = create_laplacian(list(df.energy))
+X_sica = sica.fit_transform(X, lap)
 df['x_sica'] = X_sica[:, 0]
 df['y_sica'] = X_sica[:, 1]
-
 score1, score2 = [], []
 for i in range(0,10):
     X_train, X_test, Y_train, Y_test = train_test_split(df[['x_pca', 'y_pca']], df.genre.astype('category').cat.codes)
@@ -218,7 +209,7 @@ p2.add_tools(hover2)
 
 table = Table(features, pca.components_, sica.components_[0:2, :])
 sourcetab = ColumnDataSource(table.get_dict())
-format = NumberFormatter(format='0.000000')
+format = NumberFormatter(format='0.00000')
 columns = [TableColumn(field='name', title='Feature Name'),
            TableColumn(field='pca_weightcomp1', title='PCA x-axis Weight', formatter=format),
            TableColumn(field='pca_weightcomp2', title='PCA y-axis Weight', formatter=format),
@@ -226,10 +217,14 @@ columns = [TableColumn(field='name', title='Feature Name'),
            TableColumn(field='sica_weightcomp2', title='SICA y-axis Weight', formatter=format)]
 
 data_table = DataTable(source=sourcetab, columns=columns, width=700, height=600)
-
+'''
+g1 = figure(plot_width=600, plot_height=500, x_range=(-1.1,1.1), y_range=(-1.1,1.1))
+g_render = from_networkx(G, nx.spring_layout, scale=2, center=(0,0))
+g1.renderers.append(g_render)
+'''
 # BOKEH SERVER
-lambda1 = Slider(title="lambda1", value=sica.l1, start=-np.absolute(sica.l1*2), end=np.absolute(sica.l1*2), step=1)
-lambda2 = Slider(title="lambda2", value=sica.l2, start=-np.absolute(sica.l2*2), end=np.absolute(sica.l2*2), step=1)
+lambda1 = Slider(title="lambda1", value=sica.l1, start=0, end=1, step=0.01)
+lambda2 = Slider(title="lambda2", value=sica.l2, start=0, end=1, step=0.01)
 
 button = Button(label="Recalculate", button_type='primary', width=100)
 
@@ -244,7 +239,6 @@ def update_data():
     df['y_sica'] = X_sica[:, 1]
     source.data = ColumnDataSource.from_df(df)
     table.sica_weights = sica.components_[0:2, :]
-    print(table.sica_weights)
     sourcetab.data = table.get_dict()
     score2 = []
     for i in range(0,10):
@@ -287,8 +281,6 @@ def update_regulariser(attr, old, new):
     std1, std2 = np.std(score1), np.std(score2)
     div.text= """Logistic regression accuracy using PCA: %.2f+-%.2f<br /> Linear classifier accuracy using SICA: %.2f+-%.2f"""% (s1, std1, s2, std2)
     lambda1.value, lambda2.value = sica.l1, sica.l2
-    lambda1.end, lambda2.end = np.absolute(sica.l1*2), np.absolute(sica.l2*2)
-    lambda1.start, lambda2.start = -np.absolute(sica.l1*2), -np.absolute(sica.l2*2)
 
 dropdown.on_change('value', update_regulariser)
 button.on_click(update_data)
