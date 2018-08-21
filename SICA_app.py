@@ -19,6 +19,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from bokeh.models.widgets import DataTable, DateFormatter, TableColumn, Slider, Button, Div, Dropdown, Select
 from bokeh.io import curdoc
+import random
+import networkx as nx 
+from scipy.spatial.distance import cdist, squareform
 
 class Table():
     def __init__(self, name, pca, sica):
@@ -58,8 +61,8 @@ class SICA():
         self.b = np.mean(distance_matrix(X, X))
         self.c = np.mean(np.linalg.norm(X, ord=2, axis=1))
         self.d = X.shape[1]
-        self.n = L.shape[0]
-        self.num_edges = int(dict(zip(*np.unique(L, return_counts=True)))[-1]/2)
+        self.n = X.shape[0]
+        self.num_edges = np.trace(L)/2
         self.I = np.identity(self.n)
         eig, vec = np.linalg.eig(L)
         self.eig = np.absolute(np.real(eig).flatten())
@@ -78,17 +81,37 @@ class SICA():
         t = np.sum(np.log((2*l1*self.eig)/self.num_edges + (2*l2)/self.n))
         return (-self.d/2)*t + ((self.n*self.d)/2)*np.log(2*np.pi) + l1*self.b + l2*self.c
 
+'''
 def create_laplacian(valence):
     L = np.zeros((len(valence), len(valence)), dtype=int)
-    mean = np.median(valence)
+    mean = np.mean(valence)
     groups = np.zeros((len(valence)))
     groups[valence>mean] = 1
     count = Counter(groups)
     for key, value in tqdm(count.items()):
         ind = [i for i in range(0, len(valence)) if groups[i] == key]
+        #rand_ind = [random.randint(0, len(valence)-1) for p in range(0, 5)]
         for i in ind:
             L[i, ind] = -1
-            L[i, i] = value
+        #    L[i, rand_ind] = -1
+            L[i, i] = value #+ len(rand_ind)
+    return L
+'''
+def create_laplacian(feat):
+    dist = np.zeros((len(feat), len(feat)))
+    for i in range(0, len(feat)):
+        distvec = list(np.absolute(np.array(feat)-feat[i]))
+        for k in range(0, len(distvec)):
+            dist[i, k] = distvec[k]
+        #ind = [x for x in list(np.absolute(np.array(feat)))]
+    e = 0.1
+    ind = dist<e 
+    ind2 = dist>=e 
+    dist[ind] = 1
+    dist[ind2] = 0
+    np.fill_diagonal(dist, 0)
+    G = nx.from_numpy_matrix(dist)
+    L = nx.laplacian_matrix(G).todense().view(dtype=np.int64, type=np.ndarray)
     return L
 
 # List of features to use in PCA and SICA from the dataframe
@@ -164,7 +187,7 @@ tooltip = """
            """
 source = ColumnDataSource(df)
 
-p1=figure(plot_width=600, plot_height=500, title='PCA',
+p1 = figure(plot_width=600, plot_height=500, title='PCA',
          toolbar_location="below", tools="tap")
 p2 = figure(plot_width=600, plot_height=500, title='SICA',
         toolbar_location="below", tools="tap")
@@ -193,11 +216,9 @@ taptool.callback = OpenURL(url="@youtube")
 p1.add_tools(hover1)
 p2.add_tools(hover2)
 
-weights = pca.components_
-weights2 = sica.components_[0:2, :]
 table = Table(features, pca.components_, sica.components_[0:2, :])
 sourcetab = ColumnDataSource(table.get_dict())
-format = NumberFormatter(format='0.00000')
+format = NumberFormatter(format='0.000000')
 columns = [TableColumn(field='name', title='Feature Name'),
            TableColumn(field='pca_weightcomp1', title='PCA x-axis Weight', formatter=format),
            TableColumn(field='pca_weightcomp2', title='PCA y-axis Weight', formatter=format),
@@ -207,8 +228,8 @@ columns = [TableColumn(field='name', title='Feature Name'),
 data_table = DataTable(source=sourcetab, columns=columns, width=700, height=600)
 
 # BOKEH SERVER
-lambda1 = Slider(title="lambda1", value=sica.l1, start=0, end=sica.l1*2, step=1)
-lambda2 = Slider(title="lambda2", value=sica.l2, start=0, end=sica.l2*2, step=1)
+lambda1 = Slider(title="lambda1", value=sica.l1, start=-np.absolute(sica.l1*2), end=np.absolute(sica.l1*2), step=1)
+lambda2 = Slider(title="lambda2", value=sica.l2, start=-np.absolute(sica.l2*2), end=np.absolute(sica.l2*2), step=1)
 
 button = Button(label="Recalculate", button_type='primary', width=100)
 
@@ -223,6 +244,7 @@ def update_data():
     df['y_sica'] = X_sica[:, 1]
     source.data = ColumnDataSource.from_df(df)
     table.sica_weights = sica.components_[0:2, :]
+    print(table.sica_weights)
     sourcetab.data = table.get_dict()
     score2 = []
     for i in range(0,10):
@@ -265,7 +287,8 @@ def update_regulariser(attr, old, new):
     std1, std2 = np.std(score1), np.std(score2)
     div.text= """Logistic regression accuracy using PCA: %.2f+-%.2f<br /> Linear classifier accuracy using SICA: %.2f+-%.2f"""% (s1, std1, s2, std2)
     lambda1.value, lambda2.value = sica.l1, sica.l2
-    lambda1.end, lambda2.end = sica.l1*2, sica.l2*2
+    lambda1.end, lambda2.end = np.absolute(sica.l1*2), np.absolute(sica.l2*2)
+    lambda1.start, lambda2.start = -np.absolute(sica.l1*2), -np.absolute(sica.l2*2)
 
 dropdown.on_change('value', update_regulariser)
 button.on_click(update_data)
